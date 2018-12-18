@@ -3,6 +3,7 @@
             [clojure.pprint :refer [pprint]]
             [clojure.string :as string]
             [clojure.test :refer :all]
+            [loom.io :as lio]
             [loom.graph :as graph]))
 
 
@@ -30,9 +31,9 @@
 
 (def opposite-dirs
   {:dir/left :dir/right
-  :dir/right :dir/left 
-  :dir/up :dir/down
-  :dir/down :dir/up})
+   :dir/right :dir/left 
+   :dir/up :dir/down
+   :dir/down :dir/up})
 
 (defmulti move (fn [pos dir] dir))
 
@@ -54,6 +55,8 @@
 
 (def track-pieces #{\\ \/ \- \| \+ \> \< \^ \v})
 
+(def cart-chars #{\^ \v \< \>})
+
 (defn add-track
   [g [x y :as p] section]
   (apply graph/add-edges g
@@ -65,31 +68,43 @@
   [cp [x y]]
   (get-in cp [y x]))
 
+(move [4 5] :dir/right)
+
+;[4 5] \\ {:p [4 5], :corner \\, :chars (\+ \space \- \-)}
 (defn add-corner
   [g [x y :as p] corner cart-map]
-  (let [u (move p :dir/up)
-        l (move p :dir/left) 
-        d (move p :dir/down)
-        r (move p :dir/right)]
+  (let [[up lp dp rp :as dirs] (map (partial move p)
+                                    [:dir/up :dir/left :dir/down :dir/right])
+        [uc lc dc rc :as chrs] (map (partial get-in-cp cart-map) dirs)
+        h-tracks (into #{\- \+} cart-chars)
+        v-tracks (into #{\| \+} cart-chars)]
     (cond
-      ; -\  or |
-      ;  |     \-
-      ; left down or up right
+      ; -\
+      ;  |
       (and (= \\ corner)
-           (track-pieces (get-in-cp cart-map u))
-           (track-pieces (get-in-cp cart-map r))) (graph/add-edges g [p u] [p r])
+           (h-tracks lc)
+           (v-tracks dc))
+      (graph/add-edges g [p lp] [p dp])
+      ; |
+      ; \-
       (and (= \\ corner)
-           (track-pieces (get-in-cp cart-map l))
-           (track-pieces (get-in-cp cart-map d))) (graph/add-edges g [p l] [p d])
-      ; /-     |
-      ; |     -/
-      ; right down or up left
+           (h-tracks rc)
+           (v-tracks uc))
+      (graph/add-edges g [p rp] [p up])
+      ; /-
+      ; |
       (and (= \/ corner)
-           (track-pieces (get-in-cp cart-map u))
-           (track-pieces (get-in-cp cart-map l))) (graph/add-edges g [p u] [p l])
+           (h-tracks rc)
+           (v-tracks dc))
+      (graph/add-edges g [p rp] [p dp])
+      ;  |
+      ; -/
       (and (= \/ corner)
-           (track-pieces (get-in-cp cart-map d))
-           (track-pieces (get-in-cp cart-map r))) (graph/add-edges g [p d] [p r]))))
+           (h-tracks lc)
+           (v-tracks uc))
+      (graph/add-edges g [p lp] [p up])
+      :else
+      (throw (ex-info "corner not a corner" {:p p :corner corner :chars chrs})))))
 
 (defn add-inter
   [g [x y :as p] cart-map]
@@ -136,13 +151,81 @@
                   x (range width)]
               [x y]))))
 
+
+(def corner-test-nodes
+  #{[0 0] [1 0] [2 0] [3 0]
+    [0 1]       [2 1] [3 1] [4 1] [5 1]
+    [0 2] [1 2] [2 2] [3 2] [4 2] [5 2] [6 2] [7 2]
+    [1 3] [2 3] [3 3] [4 3] [5 3] [6 3] [7 3] [8 3]
+    [1 4] [2 4] [3 4] [4 4] [5 4]       [7 4] [8 4]
+    [1 5]             [4 5] [5 5] [6 5] [7 5] [8 5]
+    [1 6] [2 6] [3 6] [4 6] [5 6] [6 6] [7 6] [8 6]})
+
+(def corner-test-adj-list
+  {[0 0] #{[0 1] [1 0]}
+   [1 0] #{[0 0] [2 0]}
+   [2 0] #{[1 0] [3 0]}
+   [3 0] #{[2 0] [3 1]}
+   [0 1] #{[0 0] [0 2]}
+   [2 1] #{[2 2] [3 1]}
+   [3 1] #{[3 0] [3 2] [2 1] [4 1]}
+   [4 1] #{[3 1] [5 1]}
+   [5 1] #{[4 1] [5 2]}
+   [0 2] #{[0 1] [1 2]}
+   [1 2] #{[0 2] [2 2]}
+   [2 2] #{[1 2] [2 1] [2 3] [3 2]}
+   [3 2] #{[3 1] [2 2]}
+   [4 2] #{[4 3] [5 2]}
+   [5 2] #{[4 2] [5 1] [6 2] [5 3]}
+   [6 2] #{[5 2] [7 2]}
+   [7 2] #{[7 3] [6 2]}
+   [1 3] #{[2 3] [1 4]}
+   [2 3] #{[1 3] [2 2] [3 3] [2 4]}
+   [3 3] #{[2 3] [4 3]}
+   [4 3] #{[3 3] [4 2] [4 4] [5 3]}
+   [5 3] #{[4 3] [5 2] [6 3] [5 4]}
+   [6 3] #{[5 3] [7 3]}
+   [7 3] #{[7 2] [6 3] [7 4] [8 3]}
+   [8 3] #{[7 3] [8 4]}
+   [1 4] #{[1 3] [1 5]}
+   [2 4] #{[2 3] [3 4]}
+   [3 4] #{[2 4] [4 4]}
+   [4 4] #{[3 4] [5 4] [4 3] [4 5]}
+   [5 4] #{[4 4] [5 3]}
+   [7 4] #{[7 3] [7 5]}
+   [8 4] #{[8 3] [8 5]}
+   [1 5] #{[1 4] [1 6]}
+   [4 5] #{[4 4] [5 5]}
+   [5 5] #{[4 5] [6 5]}
+   [6 5] #{[5 5] [7 5]}
+   [7 5] #{[7 4] [6 5]}
+   [8 5] #{[8 4] [8 6]}
+   [1 6] #{[1 5] [2 6]}
+   [2 6] #{[1 6] [3 6]}
+   [3 6] #{[2 6] [4 6]}
+   [4 6] #{[3 6] [5 6]}
+   [5 6] #{[4 6] [6 6]}
+   [6 6] #{[5 6] [7 6]}
+   [7 6] #{[6 6] [8 6]}
+   [8 6] #{[8 5] [7 6]}})
+
+(deftest test-corner-test
+  (let [{:keys [graph]} (parse-state (slurp (io/resource "day13_corner_case.txt")))]
+    (testing "nodes"
+      (is (= corner-test-nodes (graph/nodes graph))))
+    (testing "neighbors"
+      (doseq [n (graph/nodes graph)]
+        (is (= (corner-test-adj-list n)
+               (set (graph/successors graph n)))
+            n)))))
+
 (def test-nodes
   #{[0 0] [1 0] [2 0] [3 0] [4 0]
     [0 1]                   [4 1]             [7 1] [8 1] [9 1] [10 1] [11 1] [12 1]
     [0 2]       [2 2] [3 2] [4 2] [5 2] [6 2] [7 2] [8 2] [9 2]               [12 2]
     [0 3]       [2 3]       [4 3]             [7 3]       [9 3]               [12 3]
     [0 4] [1 4] [2 4] [3 4] [4 4]             [7 4] [8 4] [9 4] [10 4] [11 4] [12 4]
-                [2 5] [3 5] [4 5] [5 5] [6 5] [7 5] [8 5] [9 5]})
+    [2 5] [3 5] [4 5] [5 5] [6 5] [7 5] [8 5] [9 5]})
 
 (def test-adj-list
   {; right loop
@@ -161,7 +244,7 @@
    [8 4] #{[9 4] [7 4]}
    [7 4] #{[8 4] [7 3]}
    [7 3] #{[7 4] [7 2]}
-   
+
    ; center loop
    [2 2] #{[3 2] [2 3]}
    [3 2] #{[4 2] [2 2]}
@@ -292,11 +375,9 @@
                                     :dir next-dir
                                     :last-turn turn))))
 
+
 (defn move-cart
   [state {:keys [pos dir last-turn] :as cart}]
-  ; move along track
-  ; turn at a corner
-  ; at intersection, turn based on last-turn 
   (cond (at-corner? state cart) (turn-corner state cart)
         (at-intersection? state cart) (nav-intersection state cart) 
         :else (move-cart-forward state cart)))
@@ -373,13 +454,49 @@
      [pos i]
      (recur states (inc i)))))
 
-#_(first-crash (parse-state (first test-states)))
+
+(defn find-first-negative
+  [initial-state max-iters]
+  (loop [[{:keys [carts] :as s} & states] (iterate next-state initial-state)
+         i 0]
+    (cond (> i max-iters) :not-yet 
+          (every? (complement neg?) (mapcat :pos carts)) (recur states (inc i))
+          :else [i s])))
+
+(defn carts-on-track?
+  [{:keys [graph carts]}]
+  (let [nodes (graph/nodes graph)]
+    (every? (comp (partial contains? nodes) :pos)  carts)))
+
+(defn carts-off-track
+  [{:keys [graph carts]}]
+  (let [nodes (graph/nodes graph)]
+    (remove (fn [{:keys [pos]}]
+              (contains? nodes pos))
+            carts)))
+
 
 (comment
+  (first-crash (parse-state (first test-states)))
   (def initial-state (parse-state (slurp (io/resource "day13.txt"))))
-
+  (def all-states (iterate next-state initial-state))
   (first-crash initial-state)
+  (find-first-negative initial-state 20000)
+
+  (crash-pos (nth-state initial-state 276))
+
+  (every? carts-on-track? (take 20000 (iterate next-state initial-state)))
+
+  ;29,104, not the first crash!
 
   (first (drop-while #(nil? (crash-pos %)) (iterate next-state initial-state)))
-  ; NEGATIVE POSITIONS!!!!
+
+  (pprint successor-count-freq)
+  (def successor-count-freq
+    (let [g (:graph initial-state)]
+      (->> (graph/nodes g)
+           (map (comp count (partial graph/successors g)))
+           (frequencies)
+           )))
+
   )
