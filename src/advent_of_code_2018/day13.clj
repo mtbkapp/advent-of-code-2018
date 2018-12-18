@@ -12,7 +12,8 @@
        (string/split-lines)
        (remove empty?)
        (partition 6)
-       (map #(string/join \newline %))))
+       (map #(string/join \newline %))
+       (into [])))
 
 (def first-turn :turn/left)
 
@@ -26,6 +27,12 @@
    \> :dir/right
    \^ :dir/up
    \v :dir/down})
+
+(def opposite-dirs
+  {:dir/left :dir/right
+  :dir/right :dir/left 
+  :dir/up :dir/down
+  :dir/down :dir/up})
 
 (defmulti move (fn [pos dir] dir))
 
@@ -216,6 +223,7 @@
           (is (= :dir/down dir))
           (is (= :turn/right last-turn)))))))
 
+
 (defn at-corner?
   [{:keys [graph] :as state} {:keys [pos] :as cart}]
   (let [[[x0 y0] [x1 y1] :as ss] (seq (graph/successors graph pos))]
@@ -224,28 +232,75 @@
          (not= x0 x1)
          (not= y0 y1))))
 
+
 (defn at-intersection? 
   [{:keys [graph] :as state} {:keys [pos] :as cart}]
   (= 4 (count (graph/successors graph pos))))
+
+(defn replace-cart 
+  [state old-cart new-cart]
+  (update state :carts #(-> % (disj old-cart) (conj new-cart))))
+
 
 (defn move-cart-forward
   [{:keys [graph] :as state} {:keys [pos dir] :as cart}]
   (let [ss (graph/successors graph pos)
         next-pos (move pos dir)]
-    (update state :carts
-            (fn [carts]
-              (-> carts
-                  (disj cart)
-                  (conj (assoc cart :pos next-pos)))))))
+    (replace-cart state cart (assoc cart :pos next-pos))))
+
+
+(defn dir-from
+  [a b]
+  (cond (= b (move a :dir/up)) :dir/up
+        (= b (move a :dir/down)) :dir/down
+        (= b (move a :dir/left)) :dir/left
+        (= b (move a :dir/right)) :dir/right))
+
+
+(defn turn-corner
+  [{:keys [graph] :as state} {:keys [pos dir] :as cart}]
+  (let [ss (disj (graph/successors graph pos)
+                 (move pos (opposite-dirs dir)))
+        next-pos (first ss)
+        next-dir (dir-from pos next-pos)]
+    (replace-cart state cart (assoc cart
+                                    :pos next-pos
+                                    :dir next-dir))))
+
+
+(def dir-turns 
+  {:dir/up [:dir/left :dir/right]
+   :dir/right [:dir/up :dir/down]
+   :dir/down [:dir/right :dir/left]
+   :dir/left [:dir/down :dir/up]})
+
+(defn dir-for-turn 
+  [dir turn]
+  (let [[left right] (dir-turns dir)]
+    (case turn
+      :turn/left left
+      :turn/right right
+      dir)))
+
+(defn nav-intersection
+  [{:keys [graph] :as state} {:keys [pos dir last-turn] :as cart}]
+  (let [turn (next-turn last-turn)
+        next-dir (dir-for-turn dir turn)
+        next-pos (move pos next-dir)]
+    (replace-cart state cart (assoc cart
+                                    :pos next-pos
+                                    :dir next-dir
+                                    :last-turn turn))))
 
 (defn move-cart
   [state {:keys [pos dir last-turn] :as cart}]
   ; move along track
   ; turn at a corner
   ; at intersection, turn based on last-turn 
-  (cond (at-corner? state cart) state
-        (at-intersection? state cart) state
+  (cond (at-corner? state cart) (turn-corner state cart)
+        (at-intersection? state cart) (nav-intersection state cart) 
         :else (move-cart-forward state cart)))
+
 
 (defn sort-carts
   [carts]
@@ -256,16 +311,75 @@
                (< y0 y1)))
            carts))
 
+
 (defn next-state
   [state]
   (reduce move-cart state (sort-carts (:carts state))))
 
+
+(defn same-carts?
+  [{s0 :carts} {s1 :carts}]
+  (and (some? s0)
+       (some? s1)
+       (every? true? (map (fn [x y]
+                            (= (:pos x) (:pos y)))
+                          (sort-carts s0)
+                          (sort-carts s1)))))
+
+
+
 (deftest test-next-state
-  (testing "check cart positions"
+  (testing "test move 1 tick"
     (let [s0 (parse-state (first test-states))
-          expected-carts (sort-carts (:carts (parse-state (second test-states))))
-          carts (sort-carts (:carts (next-state s0)))]
-      (is (= (-> expected-carts first :pos)
-             (-> carts first :pos)))
-      (is (= (-> expected-carts second :pos)
-             (-> carts second :pos))))))
+          expected-s1  (parse-state (second test-states))
+          s1 (next-state s0)]
+      (is (same-carts? expected-s1 s1))))
+  (testing "check move all test ticks"
+    (loop [[expected-state & tss] (pop test-states)
+           s_n (parse-state (first test-states))
+           i 0]
+      (when (some? expected-state)
+        (is (same-carts? (parse-state expected-state) s_n) i)
+        (recur tss (next-state s_n) (inc i))))))
+
+(defn nth-state
+  [initial n]
+  (->> (iterate next-state initial)
+       (drop n)
+       first))
+
+
+#_(print-states-at 13)
+(defn print-states-at
+  [i]
+  (prn "expected" (->> (nth test-states i) (parse-state ) (:carts) (sort-carts)))
+  (prn "actual" (:carts (nth-state (parse-state (first test-states)) i))))
+
+(defn crash-pos 
+  [{:keys [carts] :as state}]
+  (some (fn [[pos carts]]
+          (if (< 1 (count carts))
+            pos))
+        (group-by :pos carts)))
+
+(deftest test-crash-pos
+  (is (= [7 3]
+         (crash-pos (nth-state (parse-state (first test-states)) 14)))))
+
+(defn first-crash
+  ([initial-state] (first-crash (iterate next-state initial-state) 0))
+  ([[s & states] i]
+   (if-let [pos (crash-pos s)]
+     [pos i]
+     (recur states (inc i)))))
+
+#_(first-crash (parse-state (first test-states)))
+
+(comment
+  (def initial-state (parse-state (slurp (io/resource "day13.txt"))))
+
+  (first-crash initial-state)
+
+  (first (drop-while #(nil? (crash-pos %)) (iterate next-state initial-state)))
+  ; NEGATIVE POSITIONS!!!!
+  )
