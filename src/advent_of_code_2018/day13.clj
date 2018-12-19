@@ -1,10 +1,12 @@
 (ns advent-of-code-2018.day13
   (:require [clojure.java.io :as io]
             [clojure.pprint :refer [pprint]]
+            [clojure.set :as sets]
             [clojure.string :as string]
             [clojure.test :refer :all]
             [loom.io :as lio]
-            [loom.graph :as graph]))
+            [loom.graph :as graph])
+  (:gen-class))
 
 
 #_(println (first test-states))
@@ -16,12 +18,21 @@
        (map #(string/join \newline %))
        (into [])))
 
-(def first-turn :turn/left)
+
+(def test-states2
+  (->> (slurp (io/resource "day13_crashing.txt"))
+       (string/split-lines)
+       (remove empty?)
+       (partition 7)
+       (map #(string/join \newline %))
+       (into [])))
+
 
 (def next-turn
   {:turn/left :turn/straight
    :turn/straight :turn/right
    :turn/right :turn/left})
+
 
 (def cart-dirs
   {\< :dir/left
@@ -29,11 +40,13 @@
    \^ :dir/up
    \v :dir/down})
 
+
 (def opposite-dirs
   {:dir/left :dir/right
    :dir/right :dir/left 
    :dir/up :dir/down
    :dir/down :dir/up})
+
 
 (defmulti move (fn [pos dir] dir))
 
@@ -53,9 +66,11 @@
   [[x y] _]
   [(inc x) y])
 
+
 (def track-pieces #{\\ \/ \- \| \+ \> \< \^ \v})
 
 (def cart-chars #{\^ \v \< \>})
+
 
 (defn add-track
   [g [x y :as p] section]
@@ -64,13 +79,12 @@
            \- [[p (move p :dir/left)] [p (move p :dir/right)]]
            \| [[p (move p :dir/up)] [p (move p :dir/down)]])))
 
+
 (defn get-in-cp
   [cp [x y]]
   (get-in cp [y x]))
 
-(move [4 5] :dir/right)
 
-;[4 5] \\ {:p [4 5], :corner \\, :chars (\+ \space \- \-)}
 (defn add-corner
   [g [x y :as p] corner cart-map]
   (let [[up lp dp rp :as dirs] (map (partial move p)
@@ -106,6 +120,7 @@
       :else
       (throw (ex-info "corner not a corner" {:p p :corner corner :chars chrs})))))
 
+
 (defn add-inter
   [g [x y :as p] cart-map]
   (reduce (fn [g [nx ny :as np]]
@@ -115,11 +130,13 @@
           g
           [(move p :dir/up) (move p :dir/left) (move p :dir/down) (move p :dir/down)]))
 
+
 (def cart->track
   {\^ \|
    \v \|
    \< \-
    \> \-})
+
 
 (defn add-cart
   [state [x y :as p] cart]
@@ -130,6 +147,7 @@
       (update :carts conj {:pos p
                            :dir (cart-dirs cart)
                            :last-turn :turn/right})))
+
 
 #_(pprint (parse-state (first test-states)))
 (defn parse-state
@@ -150,6 +168,78 @@
             (for [y (range height)
                   x (range width)]
               [x y]))))
+
+
+(def color-reset "\u001B[0m")
+(def color-cart "\u001B[46m")
+
+#_(print-state (parse-state (slurp (io/resource "day13_corner_case.txt"))))
+(defn print-state
+  [{:keys [graph carts]}]
+  (let [nodes (graph/nodes graph)
+        [max-x max-y] (reduce (fn [[max-x max-y] [x y]]
+                                [(max max-x x) (max max-y y)])
+                              [0 0] nodes)
+        carts-by-pos (reduce (fn [idx {:keys [pos] :as c}]
+                               (assoc idx pos c))
+                             {} carts)]
+    (doseq [y (range 0 (inc max-y))]
+      (doseq [x (range 0 (inc max-x))]
+        (print (cond (contains? carts-by-pos [x y])
+                     (str color-cart
+                          (case (:dir (carts-by-pos [x y]))
+                            :dir/left \<
+                            :dir/right \>
+                            :dir/up \^
+                            :dir/down \v)
+                          color-reset)
+                     (contains? nodes [x y])
+                     (let [[[x0 y0 :as p0] [x1 y1 :as p1] :as ss]
+                           (sort-by identity (comparator (fn [[x0 y0] [x1 y1]]
+                                                           (if (= y0 y1)
+                                                             (< x0 x1)
+                                                             (< y0 y1))))
+                                    (graph/successors graph [x y]))]
+                       (cond ;intersection
+                             (= 4 (count ss)) \+
+                             ; straight
+                             (= y0 y1) \-
+                             (= x0 x1) \|
+                             ; corners
+                             ; |
+                             ; \-
+                             (and (= x0 x) (= y0 (dec y)) 
+                                  (= x1 (inc x)) (= y1 y)) \\
+                             ; -\
+                             ;  |
+                             (and (= x0 (dec x)) (= y0 y)
+                                  (= x1 x) (= y1 (inc y))) \\
+                             ; /-
+                             ; |
+                             (and (= x0 (inc x)) (= y0 y)
+                                  (= x1 x) (= y1 (inc y))) \/
+                             ; |
+                             ;-/
+                             (and (= x0 x) (= y0 (dec y))
+                                  (= x1 (dec x)) (= y1 y)) \/
+                             :else \E))
+                     :else \space)))
+      (println))))
+
+
+(deftest test-print-state
+  (let [state-string (slurp (io/resource "day13_corner_case.txt"))
+        state (parse-state state-string)
+        state-lines (into []
+                          (map string/trim)
+                          (string/split-lines state-string))
+        printed-lines (into []
+                            (map string/trim)
+                            (string/split-lines (with-out-str (print-state state))))]
+    (is (= (count state-lines) (count printed-lines)))
+    (doseq [i (range (count state-lines))]
+      (is (= (nth state-lines i)
+             (nth printed-lines i))))))
 
 
 (def corner-test-nodes
@@ -383,19 +473,44 @@
         :else (move-cart-forward state cart)))
 
 
-(defn sort-carts
-  [carts]
-  (sort-by :pos
-           (fn [[x0 y0] [x1 y1]]
-             (if (= y0 y1)
-               (< x0 x1) 
-               (< y0 y1)))
-           carts))
+(def compare-carts
+  (comparator (fn [{[x0 y0] :pos} {[x1 y1] :pos}]
+                (if (= y0 y1)
+                  (< x0 x1) 
+                  (< y0 y1)))))
 
 
+(defn crashed-carts
+  [{:keys [carts] :as state}]
+  (into #{} (comp (map val)
+                  (filter #(< 1 (count %)))
+                  (mapcat identity))
+        (group-by :pos carts)))
+
+
+(defn remove-carts
+  [state carts]
+  (reduce (fn [s c]
+            (update s :carts disj c))
+          state
+          carts))
+
+
+#_(next-state (parse-state (slurp (io/resource "day13_corner_case.txt"))))
 (defn next-state
-  [state]
-  (reduce move-cart state (sort-carts (:carts state))))
+  [{:keys [carts] :as state}]
+  (loop [s0 state 
+         [c & cs] carts
+         crashed #{}]
+    (if (some? c)
+      (if (contains? crashed c)
+        (recur s0 cs crashed)
+        (let [s1 (move-cart s0 c)
+              new-crashed (crashed-carts s1)]
+          (recur (remove-carts s1 new-crashed)
+                 cs
+                 (into crashed new-crashed))))
+      s0)))
 
 
 (defn same-carts?
@@ -404,9 +519,8 @@
        (some? s1)
        (every? true? (map (fn [x y]
                             (= (:pos x) (:pos y)))
-                          (sort-carts s0)
-                          (sort-carts s1)))))
-
+                          (sort compare-carts s0)
+                          (sort compare-carts s1)))))
 
 
 (deftest test-next-state
@@ -423,80 +537,46 @@
         (is (same-carts? (parse-state expected-state) s_n) i)
         (recur tss (next-state s_n) (inc i))))))
 
-(defn nth-state
-  [initial n]
-  (->> (iterate next-state initial)
-       (drop n)
-       first))
-
-
-#_(print-states-at 13)
-(defn print-states-at
-  [i]
-  (prn "expected" (->> (nth test-states i) (parse-state ) (:carts) (sort-carts)))
-  (prn "actual" (:carts (nth-state (parse-state (first test-states)) i))))
-
-(defn crash-pos 
-  [{:keys [carts] :as state}]
-  (some (fn [[pos carts]]
-          (if (< 1 (count carts))
-            pos))
-        (group-by :pos carts)))
-
-(deftest test-crash-pos
-  (is (= [7 3]
-         (crash-pos (nth-state (parse-state (first test-states)) 14)))))
-
-(defn first-crash
-  ([initial-state] (first-crash (iterate next-state initial-state) 0))
-  ([[s & states] i]
-   (if-let [pos (crash-pos s)]
-     [pos i]
-     (recur states (inc i)))))
-
-
-(defn find-first-negative
-  [initial-state max-iters]
-  (loop [[{:keys [carts] :as s} & states] (iterate next-state initial-state)
-         i 0]
-    (cond (> i max-iters) :not-yet 
-          (every? (complement neg?) (mapcat :pos carts)) (recur states (inc i))
-          :else [i s])))
-
-(defn carts-on-track?
-  [{:keys [graph carts]}]
-  (let [nodes (graph/nodes graph)]
-    (every? (comp (partial contains? nodes) :pos)  carts)))
-
-(defn carts-off-track
-  [{:keys [graph carts]}]
-  (let [nodes (graph/nodes graph)]
-    (remove (fn [{:keys [pos]}]
-              (contains? nodes pos))
-            carts)))
+(defn first-state-with-1-cart
+  [initial-state]
+  (first (drop-while (fn [{:keys [carts] :as state}]
+                       (< 1 (count carts)))
+                     (iterate next-state initial-state))))
 
 
 (comment
-  (first-crash (parse-state (first test-states)))
-  (def initial-state (parse-state (slurp (io/resource "day13.txt"))))
-  (def all-states (iterate next-state initial-state))
-  (first-crash initial-state)
-  (find-first-negative initial-state 20000)
+  (first (drop-while (fn [{:keys [carts] :as state}]
+                       (< 1 (count carts)))
+                     (iterate next-state (parse-state (slurp (io/resource "day13.txt"))))))
 
-  (crash-pos (nth-state initial-state 276))
+  (print-state
+    (first-state-with-1-cart
+      (parse-state (first test-states2))))
 
-  (every? carts-on-track? (take 20000 (iterate next-state initial-state)))
+  (-> (first-state-with-1-cart
+        (parse-state (first test-states2)))
+      :carts)
 
-  ;29,104, not the first crash!
+  ;wrong guess 36,131
+  (-> (first-state-with-1-cart
+        (parse-state (slurp (io/resource "day13.txt"))))
+      :carts)
 
-  (first (drop-while #(nil? (crash-pos %)) (iterate next-state initial-state)))
+  (def initial (parse-state (slurp (io/resource "day13.txt"))))
 
-  (pprint successor-count-freq)
-  (def successor-count-freq
-    (let [g (:graph initial-state)]
-      (->> (graph/nodes g)
-           (map (comp count (partial graph/successors g)))
-           (frequencies)
-           )))
 
+
+  
   )
+
+
+(defn -main
+  [& args]
+  (loop [s (parse-state (first test-states2))
+         i 0]
+    (println "State #" i)
+    (print-state s)
+    (prn (:carts s))
+    (.readLine *in*)
+    (println "Press Enter")
+    (recur (next-state s) (inc i))))
