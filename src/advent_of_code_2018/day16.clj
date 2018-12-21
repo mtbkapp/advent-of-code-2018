@@ -2,16 +2,9 @@
   (:require [clojure.java.io :as io]
             [clojure.pprint :refer [pprint]]
             [clojure.string :as string]
-            [clojure.spec.alpha :as spec]
+            [clojure.set :as sets]
             [clojure.test :refer :all]))
 
-
-(spec/def ::registers (spec/tuple int? int? int? int?))
-
-(spec/def ::instruction (spec/cat :optcode (spec/int-in 0 16)
-                                  :input-a int?
-                                  :input-b int?
-                                  :output int?))
 
 
 ;; PARSE THE INPUT
@@ -263,10 +256,74 @@
   (is (= #{:mulr :addi :seti}
          (potential-instructions test-sample))))
 
-(prn part1)
-(def part1
-  (->> samples
-       (map (comp count potential-instructions)))
-  )
 
+; 494
+(println "Part 1: " (->> samples
+                         (map (comp count potential-instructions))
+                         (filter #(<= 3 %))
+                         count))
+
+
+; PART 2
+(def potentials-1
+  (reduce (fn [is sample]
+            (let [op-num (-> sample :instr first)
+                  pots (potential-instructions sample)]
+              (if (contains? is op-num)
+                (update is op-num sets/intersection pots)
+                (assoc is op-num pots))))
+          {}
+          samples))
+
+#_(partition-potentials potentials-1)
+(defn partition-potentials
+  [potentials]
+  (let [pot-count (comp count val)
+        [known unknown] (->> potentials
+                             (sort-by pot-count)
+                             (partition-by #(= 1 (pot-count %))))]
+    {:known (into {} (map (juxt key (comp first val))) known)
+     :unknown (into {} unknown)}))
+
+#_(partition-potentials potentials-1)
+#_(remove-known-from-unknown (partition-potentials potentials-1))
+(defn remove-codes 
+  [pots codes]
+  (reduce (fn [new-pots [op-num _]]
+            (update new-pots op-num sets/difference codes))
+          pots
+          pots))
+
+(defn remove-known-from-unknown
+  [{:keys [known unknown]}]
+  (let [known-codes (into #{} (vals known))
+        removed (remove-codes unknown known-codes)
+        {k :known nk :unknown} (partition-potentials removed)]
+    {:known (merge known k)
+     :unknown nk}))
+
+(defn deduce-codes*
+  [{:keys [known unknown] :as divided}]
+  (if (empty? unknown)
+    known
+    (recur (remove-known-from-unknown divided))))
+
+(defn deduce-codes
+  [potentials]
+  (deduce-codes* (partition-potentials potentials)))
+
+(def op-num->op-code (deduce-codes potentials-1))
+
+(defn sub-in-op-code 
+  [[op-num & args]]
+  (cons (op-num->op-code op-num) args))
+
+(defn run-program
+  [program]
+  (transduce (map sub-in-op-code)
+             (completing exec)
+             [0 0 0 0]
+             program))
+
+(println "Part 2: " (first (run-program sample-program)))
 
